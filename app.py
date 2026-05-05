@@ -278,7 +278,33 @@ def find_best_insertion(new_prop, clusters, cap_value, osrm_url=None):
     results.sort(key=lambda r: r['score'])
     return results[:5]
 
+# ── In-memory property store ──────────────────────────────────────────────────
+# Stores uploaded properties so /cluster doesn't need them in the request body
+PROPERTY_STORE = {}
+
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    """
+    POST /upload
+    Body: { "properties": [...], "dataset_id": "my_dataset" }
+    Stores properties server-side. Use dataset_id in /cluster calls.
+    """
+    try:
+        data = request.get_json()
+        props = data.get('properties', [])
+        dataset_id = data.get('dataset_id', 'default')
+        props = [p for p in props if float(p.get('value', 0)) > 0.05]
+        PROPERTY_STORE[dataset_id] = props
+        total_val = sum(p['value'] for p in props)
+        return jsonify({
+            'dataset_id': dataset_id,
+            'property_count': len(props),
+            'total_value': round(total_val, 2)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -294,18 +320,22 @@ def health():
 def cluster():
     try:
         data = request.get_json()
-        props = data.get('properties', [])
         K = int(data.get('crew_runs', 100))
         cap_value = float(data.get('cap_value', 700))
-        # Use OSRM from request body, or fall back to environment variable
         osrm_url = data.get('osrm_url', OSRM_URL)
 
+        # Support both inline properties and dataset_id reference
+        dataset_id = data.get('dataset_id', None)
+        if dataset_id and dataset_id in PROPERTY_STORE:
+            props = PROPERTY_STORE[dataset_id]
+        else:
+            props = data.get('properties', [])
+            props = [p for p in props if float(p.get('value', 0)) > 0.05]
+
         if not props:
-            return jsonify({'error': 'No properties provided'}), 400
+            return jsonify({'error': 'No properties found. Upload first or include properties in request.'}), 400
         if K < 1:
             return jsonify({'error': 'crew_runs must be at least 1'}), 400
-
-        props = [p for p in props if float(p.get('value', 0)) > 0.05]
         clusters, target = geo_first_cluster(props, K, cap_value, osrm_url)
 
         return jsonify({
@@ -368,10 +398,6 @@ def rebalance():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
