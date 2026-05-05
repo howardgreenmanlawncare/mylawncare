@@ -58,10 +58,7 @@ def nearest_neighbour_route_km(pts, osrm_url=None):
     while remaining:
         nearest = min(remaining, key=lambda p: dist_km(p, current))
         if ordered:
-            if osrm_url:
-                total += get_osrm_duration(ordered[-1], nearest, osrm_url) / 60
-            else:
-                total += dist_km(ordered[-1], nearest)
+            total += dist_km(ordered[-1], nearest)
         ordered.append(nearest)
         current = nearest
         remaining.remove(nearest)
@@ -99,6 +96,7 @@ def geo_first_cluster(props, K, cap_value, osrm_url=None):
                 best = i
         return best
 
+    # Phase 1: greedy geographic build — stop at target, cap is hard ceiling only
     while len(c_idxs) < K and unassigned:
         si = find_seed()
         if si < 0:
@@ -133,12 +131,14 @@ def geo_first_cluster(props, K, cap_value, osrm_url=None):
         c_idxs.append(idxs)
         c_vals.append(val)
 
+    # Assign stragglers
     for i in unassigned:
         bk = min(range(len(c_cents)), key=lambda k: dist_km(props[i], c_cents[k]))
         c_idxs[bk].append(i)
         c_vals[bk] += props[i]['value']
         c_cents[bk] = get_cen(c_idxs[bk])
 
+    # Phase 2: strict improvement convergence using OSRM if available
     K_NEARBY = 12
     for _ in range(200):
         cents = [get_cen(idxs) for idxs in c_idxs]
@@ -171,6 +171,7 @@ def geo_first_cluster(props, K, cap_value, osrm_url=None):
         if moves == 0:
             break
 
+    # Build result
     clusters = []
     for k, idxs in enumerate(c_idxs):
         if not idxs:
@@ -240,6 +241,7 @@ def find_best_insertion(new_prop, clusters, cap_value, osrm_url=None):
                 best_cost = cost_end
                 best_position = len(ordered)
 
+        # Use real road time if OSRM available
         if osrm_url:
             try:
                 if best_position == 0:
@@ -295,6 +297,7 @@ def cluster():
         props = data.get('properties', [])
         K = int(data.get('crew_runs', 100))
         cap_value = float(data.get('cap_value', 700))
+        # Use OSRM from request body, or fall back to environment variable
         osrm_url = data.get('osrm_url', OSRM_URL)
 
         if not props:
@@ -365,6 +368,10 @@ def rebalance():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=False)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
